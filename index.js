@@ -12,7 +12,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "https://shadowverse-client.vercel.app/",
+    origin: "https://shadowverse-client.vercel.app",
     methods: ["GET", "POST"],
   },
 });
