@@ -6,7 +6,7 @@ const cors = require("cors");
 
 app.use(cors());
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8000;
 
 const server = http.createServer(app);
 
@@ -16,6 +16,7 @@ const io = new Server(server, {
     origin: "https://shadowverse-client.vercel.app",
     methods: ["GET", "POST"],
     transports: ["websocket", "polling"],
+    credentials: true,
   },
   allowEIO3: true,
 });
