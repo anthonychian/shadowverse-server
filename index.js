@@ -12,7 +12,8 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "https://shadowverse-client.vercel.app",
+    // origin: "http://localhost:3000",
+    origin: "http://shadowverse-client.vercel.app",
     methods: ["GET", "POST"],
   },
 });
@@ -29,6 +30,6 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(5000, () => {
+server.listen(PORT, () => {
   console.log(`Server has started on port ${PORT}`);
 });
