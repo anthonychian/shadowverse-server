@@ -15,6 +15,7 @@ const io = new Server(server, {
     // origin: "http://localhost:3000",
     origin: "https://shadowverse-client.vercel.app",
     methods: ["GET", "POST"],
+    transports: ["websocket", "polling"],
   },
   allowEIO3: true,
 });
