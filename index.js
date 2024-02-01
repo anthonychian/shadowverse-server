@@ -4,7 +4,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 
-app.use(cors({ origin: "*", credentials: true}));
+app.use(cors());
 
 const PORT = process.env.PORT || 5000;
 
@@ -15,7 +15,7 @@ const io = new Server(server, {
     // origin: "http://localhost:3000",
     origin: "*",
     methods: ["GET", "POST"],
-    transports: ["websocket", "polling"],
+    transports: ["websocket"],
     credentials: true,
   },
   allowEIO3: true,
