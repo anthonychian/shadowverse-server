@@ -20,6 +20,10 @@ const io = new Server(server, {
   allowEIO3: true,
 });
 
+app.get("/", (req, res) => {
+  res.send(`<h1>Socket IO Start on Port: ${PORT}</h1>`);
+});
+
 io.on("connection", (socket) => {
   console.log(`User Connected: ${socket.id}`);
 
