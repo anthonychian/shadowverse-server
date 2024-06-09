@@ -29,11 +29,16 @@ io.on("connection", (socket) => {
   console.log(`User Connected: ${socket.id}`);
 
   socket.on("join_room", (data) => {
+    console.log("Number of clients", io.sockets.clients(room));
     socket.join(data);
   });
 
   socket.on("send msg", (data) => {
     socket.to(data.room).emit("receive msg", data);
+  });
+
+  socket.on("disconnect", (reason) => {
+    console.log(`User Disconnected: ${socket.id}`);
   });
 });
 
