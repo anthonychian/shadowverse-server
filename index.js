@@ -13,7 +13,8 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     // origin: "http://localhost:3000",
-    origin: "https://shadowverse-client.vercel.app/",
+    // origin: "https://shadowverse-client.vercel.app/",
+    origin: "https://sveclient.vercel.app/",
     methods: ["GET", "POST"],
     transports: ["websocket"],
     credentials: true,
