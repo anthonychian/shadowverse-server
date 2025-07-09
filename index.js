@@ -27,10 +27,34 @@ app.get("/", (req, res) => {
 
 io.on("connection", (socket) => {
   console.log(`User Connected: ${socket.id}`);
+  console.log(socket.client.conn.server.clientsCount + " users connected");
+  socket.emit("active_users", socket.client.conn.server.clientsCount);
+
+  socket.on("create_room", (data) => {
+    console.log(data);
+    socket.join(data);
+    let room = io.sockets.adapter.rooms.get(data);
+    console.log("Number of clients:", room.size);
+  });
 
   socket.on("join_room", (data) => {
-    console.log("Number of clients", io.sockets.clients(room));
-    socket.join(data);
+    console.log(data);
+    let room = io.sockets.adapter.rooms.get(data);
+
+    if (room && room.size === 1) {
+      socket.join(data);
+      console.log("Number of clients: 2");
+      io.in(data).emit("start_game");
+    } else if (room && room.size === 2) {
+      console.log("Room is full 2/2");
+    } else {
+      console.log("No room available");
+    }
+  });
+
+  socket.on("leave_room", (data) => {
+    socket.leave(data);
+    console.log(`Leaving room: ${data}`);
   });
 
   socket.on("send msg", (data) => {
