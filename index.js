@@ -20,6 +20,7 @@ const io = new Server(server, {
     credentials: true,
   },
   allowEIO3: true,
+  connectionStateRecovery: {},
 });
 
 app.get("/", (req, res) => {
