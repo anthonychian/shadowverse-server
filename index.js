@@ -12,8 +12,6 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    // origin: "http://localhost:3000",
-    // origin: "https://shadowverse-client.vercel.app/",
     origin: "https://sveclient.vercel.app/",
     methods: ["GET", "POST"],
     transports: ["websocket"],
@@ -61,6 +59,20 @@ io.on("connection", (socket) => {
 
   socket.on("send msg", (data) => {
     socket.to(data.room).emit("receive msg", data);
+  });
+  socket.on("connect", (data) => {
+    socket.to(data.room).emit("receive msg", {
+      type: "online",
+      data: "Opponent is online",
+      room: data.room,
+    });
+  });
+  socket.on("disconnecting", (data) => {
+    socket.to(data.room).emit("receive msg", {
+      type: "offline",
+      data: "Opponent is offline",
+      room: data.room,
+    });
   });
 
   socket.on("disconnect", (reason) => {
