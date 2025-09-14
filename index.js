@@ -61,13 +61,13 @@ io.on("connection", (socket) => {
     socket.to(data.room).emit("receive msg", data);
   });
 
-  socket.on("disconnecting", (data) => {
-    io.to(data.room).emit("receive msg", {
-      type: "offline",
-      data: "Opponent is offline",
-      room: data.room,
-    });
-    console.log("disconnecting", data);
+  socket.on("disconnecting", (reason) => {
+    for (const room of socket.rooms) {
+      if (room !== socket.id) {
+        socket.to(room).emit("offline", socket.id);
+      }
+    }
+    console.log("disconnecting", reason);
   });
   // socket.on("disconnecting", (data) => {
   //   socket.to(data.room).emit("receive msg", {
