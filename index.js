@@ -30,12 +30,6 @@ io.on("connection", (socket) => {
   console.log(socket.client.conn.server.clientsCount + " users connected");
   socket.emit("active_users", socket.client.conn.server.clientsCount);
 
-  io.to(data.room).emit("receive msg", {
-    type: "online",
-    data: "Opponent is online",
-    room: data.room,
-  });
-
   socket.on("create_room", (data) => {
     console.log(data);
     socket.join(data);
@@ -67,20 +61,25 @@ io.on("connection", (socket) => {
     socket.to(data.room).emit("receive msg", data);
   });
 
-  socket.on("disconnecting", (data) => {
-    io.to(data.room).emit("receive msg", {
-      type: "online",
-      data: "Opponent is online",
-      room: data.room,
-    });
-    console.log("disconnecting", data);
-  });
+  // socket.on("disconnecting", (data) => {
+  //   io.to(data.room).emit("receive msg", {
+  //     type: "online",
+  //     data: "Opponent is online",
+  //     room: data.room,
+  //   });
+  //   console.log("disconnecting", data);
+  // });
   // socket.on("disconnecting", (data) => {
   //   socket.to(data.room).emit("receive msg", {
   //     type: "offline",
   //     data: "Opponent is offline",
   //     room: data.room,
   //   });
+  // });
+  //   io.to(data.room).emit("receive msg", {
+  //   type: "online",
+  //   data: "Opponent is online",
+  //   room: data.room,
   // });
 
   socket.on("disconnect", (reason) => {
