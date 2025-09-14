@@ -61,14 +61,14 @@ io.on("connection", (socket) => {
     socket.to(data.room).emit("receive msg", data);
   });
 
-  // socket.on("disconnecting", (data) => {
-  //   io.to(data.room).emit("receive msg", {
-  //     type: "online",
-  //     data: "Opponent is online",
-  //     room: data.room,
-  //   });
-  //   console.log("disconnecting", data);
-  // });
+  socket.on("disconnecting", (data) => {
+    io.to(data.room).emit("receive msg", {
+      type: "offline",
+      data: "Opponent is offline",
+      room: data.room,
+    });
+    console.log("disconnecting", data);
+  });
   // socket.on("disconnecting", (data) => {
   //   socket.to(data.room).emit("receive msg", {
   //     type: "offline",
