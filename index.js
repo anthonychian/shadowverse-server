@@ -61,19 +61,28 @@ io.on("connection", (socket) => {
     socket.to(data.room).emit("receive msg", data);
   });
   socket.on("connect", (data) => {
-    socket.to(data.room).emit("receive msg", {
+    io.to(data.room).emit("receive msg", {
       type: "online",
       data: "Opponent is online",
       room: data.room,
     });
+    console.log("connect", data);
   });
   socket.on("disconnecting", (data) => {
-    socket.to(data.room).emit("receive msg", {
-      type: "offline",
-      data: "Opponent is offline",
+    io.to(data.room).emit("receive msg", {
+      type: "online",
+      data: "Opponent is online",
       room: data.room,
     });
+    console.log("disconnecting", data);
   });
+  // socket.on("disconnecting", (data) => {
+  //   socket.to(data.room).emit("receive msg", {
+  //     type: "offline",
+  //     data: "Opponent is offline",
+  //     room: data.room,
+  //   });
+  // });
 
   socket.on("disconnect", (reason) => {
     console.log(`User Disconnected: ${socket.id}`);
