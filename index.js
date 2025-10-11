@@ -64,6 +64,15 @@ io.on("connection", (socket) => {
     socket.to(data.room).emit("receive msg", data);
   });
 
+  socket.on("request_state", ({ room }) => {
+    // Relay the request to the other player
+    socket.to(room).emit("send_full_state", { requesterId: socket.id });
+  });
+
+  socket.on("send_full_state", ({ requesterId, fullState }) => {
+    io.to(requesterId).emit("receive_full_state", fullState);
+  });
+
   socket.on("disconnecting", (reason) => {
     for (const room of socket.rooms) {
       if (room !== socket.id) {
