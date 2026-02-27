@@ -18,48 +18,71 @@ const io = new Server(server, {
     credentials: true,
   },
   allowEIO3: true,
-  connectionStateRecovery: {},
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000,
+    skipMiddlewares: true,
+  },
+  pingInterval: 5000,
+  pingTimeout: 10000,
 });
+
+// In-memory state store: roomId -> { socketId: cardState, ... }
+const roomStates = new Map();
 
 app.get("/", (req, res) => {
   res.send(`<h1>Socket IO Start on Port: ${PORT}</h1>`);
 });
 
 io.on("connection", (socket) => {
-  console.log(`User Connected: ${socket.id}`);
-  console.log(socket.client.conn.server.clientsCount + " users connected");
-  socket.emit("active_users", socket.client.conn.server.clientsCount);
-  for (const room of socket.rooms) {
-    if (room !== socket.id) {
-      socket.to(room).emit("online", socket.id);
+  const userCount = socket.client.conn.server.clientsCount;
+  console.log(
+    `User Connected: ${socket.id} (recovered: ${socket.recovered}) | ${userCount} users`,
+  );
+  socket.emit("active_users", userCount);
+
+  if (socket.recovered) {
+    for (const room of socket.rooms) {
+      if (room !== socket.id) {
+        socket.to(room).emit("send_full_state", { requesterId: socket.id });
+      }
+    }
+  } else {
+    for (const room of socket.rooms) {
+      if (room !== socket.id) {
+        socket.to(room).emit("online", socket.id);
+      }
     }
   }
   socket.on("create_room", (data) => {
-    console.log(`Socket ${socket.id} creating room: ${data}`);
+    console.log(data);
     socket.join(data);
     let room = io.sockets.adapter.rooms.get(data);
     console.log("Number of clients:", room.size);
-    socket.emit("room_created", { room: data, waiting: true });
   });
 
   socket.on("join_room", (data) => {
-    console.log(`Socket ${socket.id} attempting to join room: ${data}`);
+    console.log(data);
     let room = io.sockets.adapter.rooms.get(data);
     if (room && room.size === 1) {
       socket.join(data);
       console.log("Number of clients: 2");
-      // Notify both clients that the game can start
-      io.in(data).emit("start_game", { room: data });
-      // Notify the room creator that someone joined
-      socket.to(data).emit("player_joined", { playerId: socket.id });
-      // Confirm to the joiner
-      socket.emit("room_joined", { room: data, success: true });
+      socket.to(data).emit("online", socket.id);
+      io.in(data).emit("start_game");
     } else if (room && room.size === 2) {
       console.log("Room is full 2/2");
-      socket.emit("room_full", { room: data });
     } else {
       console.log("No room available");
-      socket.emit("room_not_found", { room: data });
+    }
+  });
+
+  socket.on("rejoin_room", (data) => {
+    const room = io.sockets.adapter.rooms.get(data);
+    if (room && !room.has(socket.id)) {
+      socket.join(data);
+      socket.to(data).emit("online", socket.id);
+      console.log(
+        `[rejoin_room] ${socket.id} rejoined ${data} (${room.size} clients)`,
+      );
     }
   });
 
@@ -69,65 +92,50 @@ io.on("connection", (socket) => {
   });
 
   socket.on("send msg", (data) => {
-    console.log(`Message from ${socket.id} to room ${data.room}:`, data);
     socket.to(data.room).emit("receive msg", data);
   });
 
-  socket.on("request_state", ({ room }) => {
-    console.log(`State request from ${socket.id} in room ${room}`);
-    // Relay the request to the other player
-    socket.to(room).emit("send_full_state", { requesterId: socket.id });
-  });
-
-  socket.on("send_full_state", ({ requesterId, fullState, room }) => {
-    console.log(`Full state sent to ${requesterId} in room ${room}`);
-    io.to(requesterId).emit("receive_full_state", fullState);
-  });
-
-  // Generic game action relay - broadcasts any game event to the room
-  socket.on("game_action", (data) => {
-    console.log(`Game action from ${socket.id}:`, data);
-    if (data.room) {
-      socket.to(data.room).emit("game_action", {
-        ...data,
-        fromPlayer: socket.id,
-      });
-    } else {
-      console.warn(`Game action from ${socket.id} missing room info`);
+  socket.on("store_state", ({ room, playerId, state }) => {
+    if (!room || !playerId) return;
+    if (!roomStates.has(room)) {
+      roomStates.set(room, {});
     }
+    roomStates.get(room)[playerId] = state;
   });
 
-  // Relay any event that includes a room property
-  socket.onAny((eventName, data) => {
-    // Skip internal socket.io events and events we've already handled
-    if (
-      eventName.startsWith("_") ||
-      [
-        "connection",
-        "disconnect",
-        "disconnecting",
-        "create_room",
-        "join_room",
-        "leave_room",
-        "send msg",
-        "request_state",
-        "send_full_state",
-        "game_action",
-      ].includes(eventName)
-    ) {
+  socket.on("request_stored_state", ({ room, playerId }) => {
+    console.log(
+      `[request_stored_state] socket=${socket.id} playerId=${playerId} room=${room}`,
+    );
+    const states = roomStates.get(room);
+    if (!states) {
+      console.log(`[request_stored_state] no stored state for room ${room}`);
       return;
     }
 
-    // If the event has a room property, relay it to other clients in that room
-    if (data && typeof data === "object" && data.room) {
-      console.log(
-        `Relaying event "${eventName}" from ${socket.id} to room ${data.room}`
-      );
-      socket.to(data.room).emit(eventName, {
-        ...data,
-        fromPlayer: socket.id,
-      });
-    }
+    const payload = {};
+    if (states[playerId]) payload.ownState = states[playerId];
+    const enemyEntry = Object.entries(states).find(([id]) => id !== playerId);
+    if (enemyEntry) payload.enemyState = enemyEntry[1];
+
+    console.log(
+      `[request_stored_state] sending: ownState=${!!payload.ownState}, enemyState=${!!payload.enemyState}`,
+    );
+    socket.emit("receive_stored_state", payload);
+  });
+
+  socket.on("request_state", ({ room }) => {
+    console.log(
+      `[request_state] ${socket.id} requesting state from room=${room}`,
+    );
+    socket.to(room).emit("send_full_state", { requesterId: socket.id });
+  });
+
+  socket.on("send_full_state", ({ requesterId, fullState }) => {
+    console.log(
+      `[send_full_state] ${socket.id} responding with state for ${requesterId}, has data: ${!!fullState}`,
+    );
+    io.to(requesterId).emit("receive_full_state", fullState);
   });
 
   socket.on("disconnecting", (reason) => {
