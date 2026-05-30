@@ -36,16 +36,12 @@ const roomStates = new Map();
 const evictionTimers = new Map();
 const EVICTION_GRACE_MS = 15_000;
 
-// Message buffer per room: roomId -> [{ seq, data, timestamp }]
-const messageBuffers = new Map();
-const MSG_BUFFER_SIZE = 100;
-const MSG_BUFFER_TTL_MS = 60_000;
-
-// Sequence counter per room
-const roomSeqCounters = new Map();
-
-// Track last received seq per socket for gap detection
-const socketLastRecvSeq = new Map();
+// Per-sender outgoing sequence counter: socketId -> n.
+// Each client only ever receives its opponent's messages, so a per-sender
+// counter gives the receiver a contiguous, gap-detectable stream. The client
+// uses gaps (and counter resets, e.g. after a server restart) to trigger a
+// full-state resync instead of silently diverging.
+const senderSeqCounters = new Map();
 
 // Track which game room each socket is in (not counting the auto-room)
 const socketRoomMap = new Map();
@@ -83,39 +79,6 @@ function evictStaleSocket(socketId) {
 
 function cleanupRoom(roomId) {
   roomStates.delete(roomId);
-  messageBuffers.delete(roomId);
-  roomSeqCounters.delete(roomId);
-}
-
-function bufferMessage(room, data) {
-  const seq = (roomSeqCounters.get(room) || 0) + 1;
-  roomSeqCounters.set(room, seq);
-
-  if (!messageBuffers.has(room)) messageBuffers.set(room, []);
-  const buf = messageBuffers.get(room);
-  buf.push({ seq, data, timestamp: Date.now() });
-  if (buf.length > MSG_BUFFER_SIZE) buf.shift();
-
-  const cutoff = Date.now() - MSG_BUFFER_TTL_MS;
-  while (buf.length > 0 && buf[0].timestamp < cutoff) buf.shift();
-
-  return seq;
-}
-
-function replayMissedMessages(socket, room) {
-  const lastSeq = socketLastRecvSeq.get(socket.id) || 0;
-  const buf = messageBuffers.get(room);
-  if (!buf || buf.length === 0) return;
-
-  const missed = buf.filter((m) => m.seq > lastSeq);
-  if (missed.length > 0) {
-    console.log(
-      `[replay] sending ${missed.length} missed messages to ${socket.id} (last_seq=${lastSeq})`,
-    );
-    socket.emit("missed_messages", {
-      messages: missed.map((m) => ({ ...m.data, _seq: m.seq })),
-    });
-  }
 }
 
 function requestStateWithRetry(socket, room) {
@@ -169,7 +132,8 @@ io.on("connection", (socket) => {
     for (const room of socket.rooms) {
       if (room !== socket.id) {
         socketRoomMap.set(socket.id, room);
-        replayMissedMessages(socket, room);
+        // Pull a fresh, authoritative copy of the opponent's live state.
+        // (Any deltas missed during the disconnect are reconciled here.)
         requestStateWithRetry(socket, room);
       }
     }
@@ -217,7 +181,6 @@ io.on("connection", (socket) => {
       console.log(
         `[rejoin_room] ${socket.id} rejoined ${data} (${room.size} clients)`,
       );
-      replayMissedMessages(socket, data);
       requestStateWithRetry(socket, data);
     }
   });
@@ -233,9 +196,16 @@ io.on("connection", (socket) => {
   });
 
   socket.on("send msg", (data) => {
-    const seq = bufferMessage(data.room, data);
-    socketLastRecvSeq.set(socket.id, seq);
-    socket.to(data.room).emit("receive msg", { ...data, _seq: seq });
+    // Per-sender sequence number. The receiver only ever sees this socket's
+    // stream, so the numbers are contiguous and any gap (or a reset back toward
+    // 1 after a server restart / socket reuse) is detectable client-side and
+    // triggers a full-state resync. `_from` lets the client key the counter per
+    // opponent and resync when the opponent reconnects with a new socket id.
+    const seq = (senderSeqCounters.get(socket.id) || 0) + 1;
+    senderSeqCounters.set(socket.id, seq);
+    socket
+      .to(data.room)
+      .emit("receive msg", { ...data, _seq: seq, _from: socket.id });
   });
 
   socket.on("store_state", ({ room, playerId, state }) => {
@@ -297,7 +267,7 @@ io.on("connection", (socket) => {
     const timer = setTimeout(() => {
       evictStaleSocket(socket.id);
       evictionTimers.delete(socket.id);
-      socketLastRecvSeq.delete(socket.id);
+      senderSeqCounters.delete(socket.id);
       socketRoomMap.delete(socket.id);
     }, EVICTION_GRACE_MS);
     evictionTimers.set(socket.id, timer);
