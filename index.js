@@ -176,12 +176,18 @@ io.on("connection", (socket) => {
 
   socket.on("rejoin_room", (data) => {
     const room = io.sockets.adapter.rooms.get(data);
-    if (room && !room.has(socket.id)) {
+    // Re-add the socket whenever it isn't already a member — INCLUDING when the
+    // room no longer exists (server restart, or both players had dropped so the
+    // room was emptied). In that case socket.join recreates it. The previous
+    // `if (room && ...)` guard silently no-opped a reconnect into an empty room,
+    // orphaning the socket: it was never put back in the room and never got a
+    // state resync, so the reconnect "didn't work" and the desync persisted.
+    if (!room || !room.has(socket.id)) {
       socket.join(data);
       socketRoomMap.set(socket.id, data);
       socket.to(data).emit("online", socket.id);
       console.log(
-        `[rejoin_room] ${socket.id} rejoined ${data} (${room.size} clients)`,
+        `[rejoin_room] ${socket.id} rejoined ${data} (${getConnectedCount(data)} clients)`,
       );
       requestStateWithRetry(socket, data);
     }
