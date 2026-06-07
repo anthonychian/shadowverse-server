@@ -15,6 +15,8 @@ const io = new Server(server, {
     origin: [
       "https://sveclient.vercel.app",
       "https://sveclient.vercel.app/",
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
     ],
     methods: ["GET", "POST"],
     credentials: true,
