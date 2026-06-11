@@ -121,6 +121,14 @@ function broadcastRooms() {
   io.to(LOBBY_CHANNEL).emit("rooms_update", buildRoomList());
 }
 
+// Push the current connected-client count to everyone so each client's
+// "users online" updates live as players join/leave (not just on their own
+// connect). Deferred to a later tick by callers on disconnect, since the
+// engine decrements its count around the same time the disconnect fires.
+function broadcastUserCount() {
+  io.emit("active_users", io.engine.clientsCount);
+}
+
 // Enforce one open room per host. Before a socket creates a new room, tear down
 // any other room it still hosts (e.g. spamming PLAY) so stale "ghost" games
 // don't pile up on the board.
@@ -180,7 +188,8 @@ io.on("connection", (socket) => {
   console.log(
     `User Connected: ${socket.id} (recovered: ${socket.recovered}) | ${userCount} users`,
   );
-  socket.emit("active_users", userCount);
+  // Tell everyone (not just the new socket) so existing clients' counts update.
+  broadcastUserCount();
 
   if (socket.recovered) {
     for (const room of socket.rooms) {
@@ -395,6 +404,8 @@ io.on("connection", (socket) => {
     // of buildRoomList(). Refresh the board immediately; the registry entry is
     // purged below once the eviction grace period elapses.
     broadcastRooms();
+    // Defer the count broadcast so the engine has decremented clientsCount.
+    setTimeout(broadcastUserCount, 0);
 
     const timer = setTimeout(() => {
       evictStaleSocket(socket.id);
