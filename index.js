@@ -34,6 +34,18 @@ const io = new Server(server, {
 // In-memory state store: roomId -> { socketId: cardState, ... }
 const roomStates = new Map();
 
+// Lobby registry: roomId -> { roomId, hostId, hostName, deckClass, isPrivate,
+// createdAt }. Drives the Home-page "active games" board. Live player counts are
+// derived from getConnectedCount(roomId) (the Socket.IO room membership) rather
+// than stored here, so the count can never drift from reality. Entries are
+// removed when a room fills (game starts), empties, or its host disconnects.
+const lobbyRooms = new Map();
+
+// Socket.IO room used as a pub/sub channel for Home-page clients that want live
+// updates of the open-games list. Sockets join it on `lobby_join` and leave it
+// when they enter a game (`lobby_leave`) or disconnect.
+const LOBBY_CHANNEL = "lobby";
+
 // Pending eviction timers: socketId -> timeout handle
 const evictionTimers = new Map();
 const EVICTION_GRACE_MS = 15_000;
@@ -81,6 +93,46 @@ function evictStaleSocket(socketId) {
 
 function cleanupRoom(roomId) {
   roomStates.delete(roomId);
+  lobbyRooms.delete(roomId);
+}
+
+// Build the list of joinable public rooms: public, and currently holding exactly
+// one connected player (1/2 — open for an opponent). A 0/2 room (host dropped,
+// awaiting eviction) or a full 2/2 room (game underway) is excluded.
+function buildRoomList() {
+  const list = [];
+  for (const [roomId, meta] of lobbyRooms) {
+    if (meta.isPrivate) continue;
+    if (getConnectedCount(roomId) !== 1) continue;
+    list.push({
+      roomId,
+      hostName: meta.hostName,
+      deckClass: meta.deckClass,
+      players: 1,
+      createdAt: meta.createdAt,
+    });
+  }
+  // Newest rooms first.
+  list.sort((a, b) => b.createdAt - a.createdAt);
+  return list;
+}
+
+function broadcastRooms() {
+  io.to(LOBBY_CHANNEL).emit("rooms_update", buildRoomList());
+}
+
+// Enforce one open room per host. Before a socket creates a new room, tear down
+// any other room it still hosts (e.g. spamming PLAY) so stale "ghost" games
+// don't pile up on the board.
+function removeHostedRooms(socket, exceptRoomId) {
+  for (const [roomId, meta] of lobbyRooms) {
+    if (meta.hostId === socket.id && roomId !== exceptRoomId) {
+      lobbyRooms.delete(roomId);
+      socket.leave(roomId);
+      const r = io.sockets.adapter.rooms.get(roomId);
+      if (!r || r.size === 0) cleanupRoom(roomId);
+    }
+  }
 }
 
 function requestStateWithRetry(socket, room) {
@@ -146,12 +198,74 @@ io.on("connection", (socket) => {
       }
     }
   }
+  // Home-page clients subscribe to the live open-games list. Send the current
+  // snapshot immediately so the board is populated without waiting for the next
+  // create/join/leave event.
+  socket.on("lobby_join", () => {
+    socket.join(LOBBY_CHANNEL);
+    socket.emit("rooms_update", buildRoomList());
+  });
+
+  socket.on("lobby_leave", () => {
+    socket.leave(LOBBY_CHANNEL);
+  });
+
+  socket.on("request_rooms", () => {
+    socket.emit("rooms_update", buildRoomList());
+  });
+
+  // Private reconnect probe. A client that remembers a room (sessionStorage)
+  // asks whether it can still rejoin it. We answer only to that socket — this is
+  // never broadcast, so an in-progress game is offered for reconnect solely to
+  // the player who left it. `isMember` lets the client distinguish a room it's
+  // already in (its own open lobby room) from one it dropped out of and should
+  // offer to reconnect to.
+  socket.on("check_room", ({ room }) => {
+    if (!room) return;
+    const r = io.sockets.adapter.rooms.get(room);
+    socket.emit("room_status", {
+      room,
+      connected: getConnectedCount(room),
+      isMember: !!(r && r.has(socket.id)),
+    });
+  });
+
+  // Host flips their room between public (listed) and private (hidden from the
+  // board; only the host's own client shows it). Guarded so only the host can
+  // change their own room.
+  socket.on("set_room_privacy", ({ roomId, isPrivate }) => {
+    const meta = lobbyRooms.get(roomId);
+    if (meta && meta.hostId === socket.id) {
+      meta.isPrivate = !!isPrivate;
+      broadcastRooms();
+    }
+  });
+
   socket.on("create_room", (data) => {
-    console.log(data);
-    socket.join(data);
-    socketRoomMap.set(socket.id, data);
-    let room = io.sockets.adapter.rooms.get(data);
-    console.log("Number of clients:", room.size);
+    // Back-compat: older callers pass the room id as a bare string. The lobby
+    // board passes { roomId, hostName, deckClass, isPrivate }.
+    const roomId = typeof data === "string" ? data : data?.roomId;
+    if (!roomId) return;
+    const meta = typeof data === "string" ? {} : data || {};
+
+    console.log(`[create_room] ${socket.id} room=${roomId} private=${!!meta.isPrivate}`);
+    // A player can only host one room at a time — close any previous one.
+    removeHostedRooms(socket, roomId);
+    socket.join(roomId);
+    socketRoomMap.set(socket.id, roomId);
+
+    lobbyRooms.set(roomId, {
+      roomId,
+      hostId: socket.id,
+      hostName: meta.hostName || "Anonymous",
+      deckClass: meta.deckClass || "",
+      isPrivate: !!meta.isPrivate,
+      createdAt: Date.now(),
+    });
+
+    const room = io.sockets.adapter.rooms.get(roomId);
+    console.log("Number of clients:", room ? room.size : 0);
+    broadcastRooms();
   });
 
   socket.on("join_room", (data) => {
@@ -167,6 +281,10 @@ io.on("connection", (socket) => {
       console.log("Number of clients:", getConnectedCount(data));
       socket.to(data).emit("online", socket.id);
       io.in(data).emit("start_game");
+      // Room is now 2/2 and the game is starting — pull it from the open-games
+      // board so no third player can try to join.
+      lobbyRooms.delete(data);
+      broadcastRooms();
     } else if (room && connected >= 2) {
       console.log("Room is full 2/2");
     } else {
@@ -201,6 +319,8 @@ io.on("connection", (socket) => {
     if (!room || room.size === 0) {
       cleanupRoom(data);
     }
+    lobbyRooms.delete(data);
+    broadcastRooms();
   });
 
   socket.on("send msg", (data) => {
@@ -271,12 +391,17 @@ io.on("connection", (socket) => {
   socket.on("disconnect", (reason) => {
     console.log(`User Disconnected: ${socket.id} (reason: ${reason})`);
     cancelStateRetry(socket.id);
+    // The socket is gone, so any room it hosted now reads as 0/2 and drops out
+    // of buildRoomList(). Refresh the board immediately; the registry entry is
+    // purged below once the eviction grace period elapses.
+    broadcastRooms();
 
     const timer = setTimeout(() => {
       evictStaleSocket(socket.id);
       evictionTimers.delete(socket.id);
       senderSeqCounters.delete(socket.id);
       socketRoomMap.delete(socket.id);
+      broadcastRooms();
     }, EVICTION_GRACE_MS);
     evictionTimers.set(socket.id, timer);
   });
