@@ -177,6 +177,47 @@ app.get("/", (req, res) => {
   res.send(`<h1>Socket IO Start on Port: ${PORT}</h1>`);
 });
 
+// Proxy the Bushiroad decklog deck-view API. The browser can't call decklog
+// directly — it returns no CORS headers — so the client hits this same-origin
+// route (cors() is enabled app-wide above) and we relay the POST server-side,
+// passing decklog's JSON straight back. The client maps each list[].card_number
+// to a local card name to fill the deck builder.
+app.get("/api/decklog/:code", async (req, res) => {
+  const code = String(req.params.code || "").trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,20}$/.test(code)) {
+    return res.status(400).json({ error: "Invalid deck code" });
+  }
+  try {
+    const upstream = await fetch(
+      `https://decklog-en.bushiroad.com/system/app/api/view/${code}`,
+      {
+        method: "POST",
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+          "Content-Type": "application/x-www-form-urlencoded",
+          Referer: `https://decklog-en.bushiroad.com/view/${code}`,
+          "User-Agent": "Mozilla/5.0",
+        },
+        body: `deck_id=${encodeURIComponent(code)}`,
+        signal: AbortSignal.timeout(15000),
+      },
+    );
+    if (!upstream.ok) {
+      return res
+        .status(502)
+        .json({ error: `decklog responded ${upstream.status}` });
+    }
+    const data = await upstream.json();
+    if (!data || !Array.isArray(data.list) || data.list.length === 0) {
+      return res.status(404).json({ error: "Deck not found or empty" });
+    }
+    res.json(data);
+  } catch (e) {
+    console.error("[decklog] proxy error:", e.message);
+    res.status(502).json({ error: "Failed to reach decklog" });
+  }
+});
+
 io.on("connection", (socket) => {
   if (evictionTimers.has(socket.id)) {
     clearTimeout(evictionTimers.get(socket.id));
